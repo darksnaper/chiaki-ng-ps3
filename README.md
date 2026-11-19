@@ -1,5 +1,7 @@
 # Chiaki-ng PS3
 
+[🇷🇺 Инструкция на русском](README.ru.md) | **🇬🇧 English**
+
 ![Chiaki-ng PS3](ps3/pkgfiles/ICON0.PNG)
 
 **PS4 and PS5 Remote Play on your PlayStation 3.** Play your PS4 or PS5 games on the TV where your
