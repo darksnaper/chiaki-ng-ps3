@@ -14,8 +14,10 @@ the open-source Remote Play client, to the PS3, built with the open-source
 ## Features
 
 - PS4 and PS5, 720p at 60 fps, decoded by the PS3's hardware video decoder
-- Finds your consoles on the network and wakes them from rest mode
-- Pair a console with its PIN from the PS3 itself
+- **Internet Remote Play via PSN (NAT UDP hole punching)** — play your remote PS5/PS4 outside your home network with **zero router or console configuration on the PS5 side**
+- Automatic PSN OAuth2 token refresh and cloud PS5 console discovery right from the PS3
+- Finds your consoles on the local network (LAN) and wakes them from rest mode
+- Pair a console with its PIN from the PS3 itself (or auto-authenticate via PSN)
 - Stereo audio with automatic drift correction, so the sound stays in sync
 - DualShock 3 with analog L2/R2 and vibration
 - Frame pacing settings: lowest delay, balanced or smoothest
@@ -23,11 +25,10 @@ the open-source Remote Play client, to the PS3, built with the open-source
 ## Requirements
 
 - A PS3 with custom firmware that can install homebrew packages (tested on Rebug + Cobra)
-- A PS4 or PS5 on the same home network. **Wired network** for both consoles is strongly recommended.
-- Your PSN account ID (typed in once, to pair a console; see below)
+- A PS4 or PS5 on your local network **or** remotely over the Internet (signed in to PSN with Remote Play enabled). **Wired Ethernet** for the PS3 is strongly recommended.
+- Your PSN account ID (and PSN OAuth2 refresh token for Internet Remote Play; see below)
 
-Not supported: internet (outside your home) Remote Play, PS5 HEVC/1080p (the PS3 decoder only does
-H.264 up to 720p here), microphone, touchpad gestures, motion controls.
+Not supported: PS5 HEVC/1080p (the PS3 decoder only does H.264 up to 720p here), microphone, touchpad gestures, motion controls.
 
 ## Install
 
@@ -36,6 +37,19 @@ H.264 up to 720p here), microphone, touchpad gestures, motion controls.
 3. Start **Chiaki-ng PS3** from the Game column.
 
 ## Set up
+
+### Internet Remote Play (PS5/PS4 outside your home — no setup on PS5 side)
+
+1. On your Mac or PC, run:
+   ```bash
+   python3 ps3/tools/psn_login.py chiaki.cfg
+   ```
+   Sign in to your PSN account in the browser and paste the redirect URL. The script fetches your PSN account ID, refresh token, and remote PS5 DUID and writes `chiaki.cfg`.
+   *(Already using chiaki-ng on a PC/Mac? You can also export its `.ini` and run `python3 ps3/tools/export_keys.py exported.ini > chiaki.cfg`.)*
+2. Put `chiaki.cfg` in the root folder of a USB stick, start **Chiaki-ng PS3**, and import it (automatic on first run, or via **START → Import chiaki.cfg from USB**).
+3. Select your remote PS5 (shown as `PSN (Internet)`) and press **✕** — the PS3 wakes it via PSN, punches through NAT automatically, and starts streaming. If you are behind a strict/symmetric NAT, enable **START → NAT port guessing (PSN): On**.
+
+### Local Network (LAN)
 
 **Pair a console (once).** Select your console in the app and press ✕.
 
