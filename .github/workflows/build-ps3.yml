@@ -71,8 +71,14 @@ jobs:
               fi
 
               cd /src/ps3
-              make -j"$(nproc)"
-              make pkg
+              if ! (make -j"$(nproc)" && make pkg) > /tmp/ps3_build.log 2>&1; then
+                cat /tmp/ps3_build.log
+                tail -n 30 /tmp/ps3_build.log | while IFS= read -r line; do
+                  echo "::error::$line"
+                done
+                exit 1
+              fi
+              cat /tmp/ps3_build.log
               ls -lh chiaki-ps3.self chiaki-ps3.pkg
             '
 

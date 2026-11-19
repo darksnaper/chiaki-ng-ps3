@@ -29,7 +29,15 @@
 #endif
 #include <windows.h>
 #include <iphlpapi.h>
-#elif defined(__SWITCH__) || defined(__PS3__)
+#elif defined(__PS3__)
+#include <unistd.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <net/socket.h>
+#include <net/netdb.h>
+#include <net/poll.h>
+#include <net/netctl.h>
+#elif defined(__SWITCH__)
 #include <unistd.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -39,9 +47,6 @@
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <poll.h>
-#ifdef __PS3__
-#include <net/netctl.h>
-#endif
 #else
 #include <unistd.h>
 #include <netinet/in.h>
@@ -4379,7 +4384,7 @@ static ChiakiErrorCode check_candidates(
         struct timeval timeout;
 #endif
 #if defined(__SWITCH__) || defined(__PS3__)
-        nfds_t npollfds = 0;
+        unsigned int npollfds = 0;
         if(!CHIAKI_SOCKET_IS_INVALID(session->ipv4_sock))
         {
             pollfds[npollfds].fd = session->ipv4_sock;
@@ -4423,7 +4428,7 @@ static ChiakiErrorCode check_candidates(
         }
         else
         {
-            for(nfds_t pi = 0; pi < npollfds; pi++)
+            for(unsigned int pi = 0; pi < npollfds; pi++)
             {
                 if(!(pollfds[pi].revents & POLLIN))
                     continue;

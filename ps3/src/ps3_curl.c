@@ -11,17 +11,23 @@
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <errno.h>
-#include <netdb.h>
 #include <netinet/in.h>
-#include <poll.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include <sys/socket.h>
 #include <unistd.h>
+#ifdef __PS3__
+#include <net/netdb.h>
+#include <net/poll.h>
+#include <net/socket.h>
+#else
+#include <netdb.h>
+#include <poll.h>
+#include <sys/socket.h>
+#endif
 
 #ifdef CHIAKI_PS3_CURL_HOST_OPENSSL
 #include <openssl/ssl.h>

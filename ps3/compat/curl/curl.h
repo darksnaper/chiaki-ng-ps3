@@ -6,7 +6,11 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
+#ifdef __PS3__
+#include <net/socket.h>
+#else
 #include <sys/socket.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {

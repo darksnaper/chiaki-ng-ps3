@@ -6,6 +6,11 @@
 
 #ifdef _WIN32
 #include <ws2tcpip.h>
+#elif defined(__PS3__)
+#include <unistd.h>
+#include <net/socket.h>
+#include <net/netdb.h>
+#include <arpa/inet.h>
 #else
 #include <unistd.h>
 #include <sys/socket.h>
