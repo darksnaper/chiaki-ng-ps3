@@ -9,7 +9,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define APP_VERSION    "1.0.0-beta4"
+#define APP_VERSION    "1.1.0-psn"
 #define APP_DIR        "/dev_hdd0/game/CHIAKIPS3/USRDIR"
 #define CFG_PATH       APP_DIR "/chiaki.cfg"
 #define LOG_PATH       APP_DIR "/chiaki.log"
@@ -21,13 +21,16 @@
 typedef struct
 {
 	char name[32];
-	char host[64];     // IP address; empty = find it on the network by host_id
+	char host[64];     // IP address; empty = find it on the network by host_id (or connect via PSN)
 	char host_id[32];  // MAC address in hex as reported by discovery
 	bool ps5;          // console type (PS4 if false)
 	char regist_key[CHIAKI_SESSION_AUTH_SIZE];
 	bool have_regist_key;
 	uint8_t morning[0x10];
 	bool have_morning;
+	uint8_t duid[32];  // PSN Device UID (32 bytes / 64 hex chars) for remote PSN connection
+	bool have_duid;
+	bool use_psn;      // true = connect directly via PSN (Internet), skip LAN discovery
 } ConfigHost;
 
 typedef struct
@@ -40,12 +43,15 @@ typedef struct
 
 	uint8_t psn_account_id[CHIAKI_PSN_ACCOUNT_ID_SIZE];
 	bool have_account_id;
+	char psn_refresh_token[256];
+	char psn_auth_token[256];
 	int resolution;    // 360/540/720
 	int fps;           // 30/60
 	int bitrate;       // kbit/s, 0 = preset default
 	int pacing;        // 0 = lowest delay, 1 = balanced, 2 = smoothest
 	bool low_latency;  // SPS no-reorder rewrite + late frame pick
 	bool vibration;    // DS3 rumble from the console
+	bool port_guessing;// force STUN port guessing for symmetric / double NAT
 	bool dump_stream;  // write the raw H.264 stream to STREAM_PATH
 	bool verbose_log;
 } Config;
@@ -53,6 +59,16 @@ typedef struct
 static inline bool config_host_registered(const ConfigHost *h)
 {
 	return h->have_regist_key && h->have_morning;
+}
+
+static inline bool config_has_psn(const Config *cfg)
+{
+	return cfg->have_account_id && (cfg->psn_refresh_token[0] != '\0' || cfg->psn_auth_token[0] != '\0');
+}
+
+static inline bool config_host_connectable(const Config *cfg, const ConfigHost *h)
+{
+	return config_host_registered(h) || (config_has_psn(cfg) && (h->have_duid || h->use_psn));
 }
 
 // Defaults, then the HDD file, then the USB stick. Returns false if no file exists
@@ -75,6 +91,8 @@ ConfigHost *config_add_host(Config *cfg);
 void config_remove_host(Config *cfg, int index);
 // Finds by host id (case-insensitive) or address; -1 if not found.
 int config_find_host(const Config *cfg, const char *host_id, const char *addr);
+// Finds by PSN DUID; -1 if not found.
+int config_find_host_by_duid(const Config *cfg, const uint8_t duid[32]);
 void config_host_set_registration(ConfigHost *h, const ChiakiRegisteredHost *reg);
 
 #endif

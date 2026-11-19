@@ -10,6 +10,7 @@
 #include "discover.h"
 #include "input.h"
 #include "menu.h"
+#include "psn.h"
 #include "video.h"
 
 #include <chiaki/discovery.h>
@@ -345,6 +346,35 @@ static void import_from_usb(Config *cfg)
 	menu_set_note(&menu, note);
 }
 
+static void discover_psn_consoles(Config *cfg)
+{
+	if(!config_has_psn(cfg))
+	{
+		dialog_wait_ok(false, "No PSN token found in chiaki.cfg.\n\n"
+			"Run python3 ps3/tools/psn_login.py on your Mac or PC to sign in to PSN and create chiaki.cfg, "
+			"then import it from a USB stick.");
+		return;
+	}
+	dialog_status("Searching your PSN account for PS5 consoles...");
+	char err[256] = {0};
+	int found = psn_discover_consoles(cfg, err, sizeof(err));
+	dialog_close();
+	if(found < 0)
+	{
+		dialog_wait_ok(true, "%s", err[0] ? err : "Could not query PSN for consoles.");
+		return;
+	}
+	menu.cfg = cfg;
+	menu.screen = MENU_SCREEN_HOSTS;
+	menu_rebuild(&menu);
+	char note[160];
+	if(found == 0)
+		snprintf(note, sizeof(note), "No PS5 consoles found on this PSN account.");
+	else
+		snprintf(note, sizeof(note), "Found %d PS5 console(s) via PSN. Press X to connect.", found);
+	menu_set_note(&menu, note);
+}
+
 // ---------------------------------------------------------------------------
 
 int menu_shell_run(Config *cfg)
@@ -406,6 +436,11 @@ int menu_shell_run(Config *cfg)
 				break;
 			case MENU_ACT_IMPORT:
 				import_from_usb(cfg);
+				input_menu_reset();
+				menu.dirty = true;
+				break;
+			case MENU_ACT_PSN_DISCOVER:
+				discover_psn_consoles(cfg);
 				input_menu_reset();
 				menu.dirty = true;
 				break;

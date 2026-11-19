@@ -474,9 +474,16 @@ static void *session_thread_func(void *arg)
 		info.target = session->connect_info.ps5 ? CHIAKI_TARGET_PS5_1 : CHIAKI_TARGET_PS4_10;
 		chiaki_regist_start(&regist, session->log, &info, regist_cb, session);
 		chiaki_cond_timedwait_pred(&session->state_cond, &session->state_mutex, 10000, session_check_state_pred_regist, session);
+		chiaki_mutex_unlock(&session->state_mutex);
 		chiaki_regist_stop(&regist);
 		chiaki_regist_fini(&regist);
+		chiaki_mutex_lock(&session->state_mutex);
 		CHECK_STOP(quit);
+		if(!session->psn_regist_succeeded)
+		{
+			session->quit_reason = CHIAKI_QUIT_REASON_PSN_REGIST_FAILED;
+			QUIT(quit);
+		}
 	}
 	if(session->auto_regist)
 	{

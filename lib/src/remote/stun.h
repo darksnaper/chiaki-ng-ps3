@@ -598,7 +598,7 @@ static bool stun_get_external_address_from_server(ChiakiLog *log, StunServer *se
                  return false;
             }
             if (xored) {
-                uint16_t xored_port = *(uint16_t*)(&binding_resp[response_pos + 6]) ^ (uint16_t)(htonl(STUN_MAGIC_COOKIE));
+                uint16_t xored_port = *(uint16_t*)(&binding_resp[response_pos + 6]) ^ htons((uint16_t)(STUN_MAGIC_COOKIE >> 16));
                 *port = ntohs(xored_port);
                 uint32_t xored_addr = *(uint32_t*)(&binding_resp[response_pos + 8]) ^ htonl(STUN_MAGIC_COOKIE);
                 uint32_t addr = xored_addr;
@@ -615,7 +615,7 @@ static bool stun_get_external_address_from_server(ChiakiLog *log, StunServer *se
                  return false;
             }
             if (xored) {
-                uint16_t xored_port = *(uint16_t*)(&binding_resp[response_pos + 6]) ^ (uint16_t)(htonl(STUN_MAGIC_COOKIE));
+                uint16_t xored_port = *(uint16_t*)(&binding_resp[response_pos + 6]) ^ htons((uint16_t)(STUN_MAGIC_COOKIE >> 16));
                 *port = ntohs(xored_port);
 
                 // XOR address with concat(STUN_MAGIC_COOKIE, transaction_id)

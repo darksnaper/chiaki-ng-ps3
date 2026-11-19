@@ -25,11 +25,12 @@ TP        := $(ROOT)/third-party
 OPUS      := $(CURDIR)/third-party/opus
 
 # ---------------------------------------------------------------------------
-# chiaki core (LAN only: no holepunch/AIA/curl, no ffmpeg)
+# chiaki core (LAN + PSN internet holepunch via mbedTLS, no AIA/ffmpeg)
 CHIAKI_SRC := $(filter-out \
 	$(LIBDIR)/src/aia.c $(LIBDIR)/src/aia_openssl.c \
 	$(LIBDIR)/src/ffmpegdecoder.c $(LIBDIR)/src/pidecoder.c, \
 	$(wildcard $(LIBDIR)/src/*.c)) \
+	$(LIBDIR)/src/remote/holepunch.c \
 	$(LIBDIR)/src/remote/rudp.c \
 	$(LIBDIR)/src/remote/rudpsendbuffer.c \
 	$(BUILDDIR)/gen/takion.pb.c

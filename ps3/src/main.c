@@ -13,6 +13,7 @@
 #include "discover.h"
 #include "input.h"
 #include "menu_shell.h"
+#include "psn.h"
 #include "ui.h"
 #include "video.h"
 
@@ -356,9 +357,9 @@ bool keep_display_alive(void)
 	return !app_exit;
 }
 
-// Fills h->host from the network if needed and wakes the PS4 from rest mode.
-// Returns false if there is no usable host.
-static bool find_console(Config *cfg, ConfigHost *h)
+// Fills h->host from the network if needed and wakes the console from rest mode.
+// Returns false if there is no usable host on LAN.
+static bool find_console(Config *cfg, ConfigHost *h, bool show_not_found_error)
 {
 	(void)cfg;
 	struct in_addr tmp;
@@ -372,15 +373,16 @@ static bool find_console(Config *cfg, ConfigHost *h)
 
 	if(!ok)
 	{
-		if(h->host[0])
+		if(h->host[0] && show_not_found_error)
 		{
 			// It may simply not answer discovery (e.g. broadcasts filtered); try the configured address.
 			app_log("Console did not answer discovery, trying %s anyway", h->host);
 			return true;
 		}
-		dialog_wait_ok(true, "Could not find the console on the network.\n\n"
-				"Make sure it is on (or in rest mode with Remote Play allowed from rest mode) and on the same network, "
-				"or set its IP address with Options > Set IP address.");
+		if(show_not_found_error)
+			dialog_wait_ok(true, "Could not find the console on the network.\n\n"
+					"Make sure it is on (or in rest mode with Remote Play allowed from rest mode) and on the same network, "
+					"or set its IP address with Options > Set IP address.");
 		return false;
 	}
 
@@ -453,6 +455,7 @@ typedef struct
 	volatile bool connected;
 	volatile bool quit;
 	volatile bool pin_requested;
+	volatile bool data_holepunch_active;
 	ChiakiQuitReason quit_reason;
 	char quit_reason_str[256];
 	uint64_t frames_lost;
@@ -498,6 +501,10 @@ static void event_cb(ChiakiEvent *event, void *user)
 			break;
 		case CHIAKI_EVENT_RUMBLE:
 			input_set_rumble(event->rumble.left, event->rumble.right);
+			break;
+		case CHIAKI_EVENT_HOLEPUNCH:
+			ctx->data_holepunch_active = !event->data_holepunch.finished;
+			app_log("PSN data holepunch %s", event->data_holepunch.finished ? "finished" : "started");
 			break;
 		case CHIAKI_EVENT_QUIT:
 			ctx->quit_reason = event->quit.reason;
@@ -651,6 +658,9 @@ static const char *explain_quit(ChiakiQuitReason r, bool ps5, bool was_connected
 		case CHIAKI_QUIT_REASON_STREAM_CONNECTION_REMOTE_DISCONNECTED:
 			return "The console ended the stream.\n\nThis happens when someone starts using the console itself, "
 				"another device connects, or the console goes to rest mode.";
+		case CHIAKI_QUIT_REASON_PSN_REGIST_FAILED:
+			return "PSN auto-authentication with the console failed.\n\nCheck that your PSN account ID matches the "
+				"account signed in on the PS5/PS4 and that Remote Play is enabled.";
 		default:
 			return "The connection ended.";
 	}
@@ -658,11 +668,14 @@ static const char *explain_quit(ChiakiQuitReason r, bool ps5, bool was_connected
 
 // Returns true if the session failed before it connected and may be retried
 // (then no error dialog was shown).
-static bool run_session(Config *cfg, ConfigHost *host, bool last_attempt)
+// Takes ownership of hp (if non-NULL): chiaki_session_fini will free it.
+static bool run_session(Config *cfg, ConfigHost *host, ChiakiHolepunchSession hp, bool last_attempt)
 {
 	bool retry = false;
 	chiaki_log_set_level(&app_log_ctx, cfg->verbose_log ? CHIAKI_LOG_ALL : (CHIAKI_LOG_ALL & ~(CHIAKI_LOG_VERBOSE | CHIAKI_LOG_DEBUG)));
-	app_log("Connecting to %s \"%s\" at %s, %dp@%d bitrate=%d pacing=%d low_latency=%d vibration=%d", host->ps5 ? "PS5" : "PS4", host->name, host->host, cfg->resolution, cfg->fps, cfg->bitrate, cfg->pacing, cfg->low_latency ? 1 : 0, cfg->vibration ? 1 : 0);
+	app_log("Connecting to %s \"%s\" (%s), %dp@%d bitrate=%d pacing=%d low_latency=%d vibration=%d",
+			host->ps5 ? "PS5" : "PS4", host->name, hp ? "PSN Internet" : host->host,
+			cfg->resolution, cfg->fps, cfg->bitrate, cfg->pacing, cfg->low_latency ? 1 : 0, cfg->vibration ? 1 : 0);
 	video_set_pacing(cfg->pacing);
 	video_set_low_latency_decode(cfg->low_latency);
 	video_set_late_latch(cfg->low_latency);
@@ -677,9 +690,15 @@ static bool run_session(Config *cfg, ConfigHost *host, bool last_attempt)
 	// Keep the console's own on-screen keyboard in the stream (typed on with the
 	// pad) instead of handing text entry to the client.
 	ci.enable_keyboard = false;
-	ci.host = host->host;
-	memcpy(ci.regist_key, host->regist_key, sizeof(ci.regist_key));
-	memcpy(ci.morning, host->morning, sizeof(ci.morning));
+	ci.holepunch_session = hp;
+	if(hp)
+		memcpy(ci.psn_account_id, cfg->psn_account_id, sizeof(ci.psn_account_id));
+	else
+	{
+		ci.host = host->host;
+		memcpy(ci.regist_key, host->regist_key, sizeof(ci.regist_key));
+		memcpy(ci.morning, host->morning, sizeof(ci.morning));
+	}
 	ChiakiVideoResolutionPreset res = cfg->resolution >= 720 ? CHIAKI_VIDEO_RESOLUTION_PRESET_720p
 		: cfg->resolution >= 540 ? CHIAKI_VIDEO_RESOLUTION_PRESET_540p : CHIAKI_VIDEO_RESOLUTION_PRESET_360p;
 	chiaki_connect_video_profile_preset(&ci.video_profile, res,
@@ -698,6 +717,8 @@ static bool run_session(Config *cfg, ConfigHost *host, bool last_attempt)
 
 	if(!video_decoder_init())
 	{
+		if(hp)
+			chiaki_holepunch_session_fini(hp);
 		dialog_wait_ok(true, "Could not start the PS3 video decoder. See %s", LOG_PATH);
 		goto out_dump;
 	}
@@ -936,22 +957,50 @@ int main(int argc, char **argv)
 		if(host_index < 0 || app_exit)
 			break;
 		ConfigHost *host = &cfg.hosts[host_index];
-		char addr_before[64];
-		snprintf(addr_before, sizeof(addr_before), "%s", host->host);
-		if(!find_console(&cfg, host))
-			continue;
-		if(strcmp(addr_before, host->host) != 0 && !config_save(&cfg))
-			app_log("Could not save the new address of %s", host->name);
-		app_log("Using %s at %s", host->ps5 ? "PS5" : "PS4", host->host);
-		for(int attempt = 1; attempt <= SESSION_ATTEMPTS && !app_exit; attempt++)
+		bool psn_available = config_has_psn(&cfg);
+		bool direct_psn = psn_available && (host->use_psn || (!host->host[0] && !host->host_id[0]));
+		bool try_psn = direct_psn;
+
+		if(!direct_psn)
 		{
-			if(!run_session(&cfg, host, attempt == SESSION_ATTEMPTS))
-				break;
-			app_log("Connection failed at the start, trying again (%d of %d)", attempt + 1, SESSION_ATTEMPTS);
-			dialog_status(host->ps5 ? "The PS5 did not answer yet, trying again..." : "The PS4 did not answer yet, trying again...");
-			uint64_t until = chiaki_time_now_monotonic_ms() + 2000;
-			while(chiaki_time_now_monotonic_ms() < until && keep_display_alive())
-				;
+			char addr_before[64];
+			snprintf(addr_before, sizeof(addr_before), "%s", host->host);
+			if(find_console(&cfg, host, !psn_available))
+			{
+				if(strcmp(addr_before, host->host) != 0 && !config_save(&cfg))
+					app_log("Could not save the new address of %s", host->name);
+				app_log("Using %s on LAN at %s", host->ps5 ? "PS5" : "PS4", host->host);
+				for(int attempt = 1; attempt <= SESSION_ATTEMPTS && !app_exit; attempt++)
+				{
+					if(!run_session(&cfg, host, NULL, attempt == SESSION_ATTEMPTS))
+						break;
+					app_log("Connection failed at the start, trying again (%d of %d)", attempt + 1, SESSION_ATTEMPTS);
+					dialog_status(host->ps5 ? "The PS5 did not answer yet, trying again..." : "The PS4 did not answer yet, trying again...");
+					uint64_t until = chiaki_time_now_monotonic_ms() + 2000;
+					while(chiaki_time_now_monotonic_ms() < until && keep_display_alive())
+						;
+				}
+			}
+			else if(!app_exit && psn_available)
+			{
+				app_log("Console not found on LAN, falling back to PSN (Internet) connection");
+				try_psn = true;
+			}
+		}
+
+		if(try_psn && !app_exit)
+		{
+			char psn_err[256] = {0};
+			ChiakiHolepunchSession hp = psn_connect_console(&cfg, host, psn_err, sizeof(psn_err));
+			dialog_close();
+			if(!hp)
+			{
+				if(!app_exit)
+					dialog_wait_ok(true, "%s", psn_err[0] ? psn_err : "PSN connection failed.");
+				continue;
+			}
+			app_log("Using %s via PSN (Internet holepunch)", host->ps5 ? "PS5" : "PS4");
+			run_session(&cfg, host, hp, true);
 		}
 	}
 

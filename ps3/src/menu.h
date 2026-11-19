@@ -57,7 +57,8 @@ typedef enum
 	MENU_ACT_QUIT,
 	MENU_ACT_MESSAGE,   // show message (text)
 	MENU_ACT_ACCOUNT,   // ask for the PSN account id; host = menu host index to register afterwards, or -1
-	MENU_ACT_IMPORT     // import chiaki.cfg from a USB stick
+	MENU_ACT_IMPORT,    // import chiaki.cfg from a USB stick
+	MENU_ACT_PSN_DISCOVER // fetch PS5 consoles from PSN account
 } MenuActionType;
 
 typedef struct

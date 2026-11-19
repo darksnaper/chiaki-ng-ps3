@@ -86,6 +86,10 @@ static bool host_key(ConfigHost *h, const char *key, const char *val)
 	}
 	else if(!strcmp(key, "rp_key") || !strcmp(key, "morning"))
 		h->have_morning = parse_hex(val, h->morning, sizeof(h->morning));
+	else if(!strcmp(key, "duid") || !strcmp(key, "psn_duid"))
+		h->have_duid = parse_hex(val, h->duid, sizeof(h->duid));
+	else if(!strcmp(key, "use_psn"))
+		h->use_psn = parse_bool(val);
 	else
 		return false;
 	return true;
@@ -99,6 +103,12 @@ static bool global_key(Config *cfg, const char *key, const char *val)
 		cfg->have_account_id = chiaki_base64_decode(val, strlen(val), cfg->psn_account_id, &sz) == CHIAKI_ERR_SUCCESS
 			&& sz == sizeof(cfg->psn_account_id);
 	}
+	else if(!strcmp(key, "psn_refresh_token"))
+		snprintf(cfg->psn_refresh_token, sizeof(cfg->psn_refresh_token), "%s", val);
+	else if(!strcmp(key, "psn_auth_token"))
+		snprintf(cfg->psn_auth_token, sizeof(cfg->psn_auth_token), "%s", val);
+	else if(!strcmp(key, "port_guessing"))
+		cfg->port_guessing = parse_bool(val);
 	else if(!strcmp(key, "resolution"))
 		cfg->resolution = atoi(val);
 	else if(!strcmp(key, "fps"))
@@ -134,7 +144,7 @@ static bool load_file(Config *cfg, const char *path)
 
 	ConfigHost *cur = NULL;     // inside a [host] section
 	ConfigHost *legacy = NULL;  // host keys before any section (old single-console format)
-	char line[256];
+	char line[512];
 	while(fgets(line, sizeof(line), f))
 	{
 		char *l = trim(line);
@@ -173,7 +183,7 @@ static bool load_file(Config *cfg, const char *path)
 	for(int i = cfg->host_count - 1; i >= 0; i--)
 	{
 		ConfigHost *h = &cfg->hosts[i];
-		if(!h->host[0] && !h->host_id[0] && !h->have_regist_key && !h->name[0])
+		if(!h->host[0] && !h->host_id[0] && !h->have_regist_key && !h->have_duid && !h->name[0])
 			config_remove_host(cfg, i);
 	}
 	return true;
@@ -304,6 +314,7 @@ bool config_save(const Config *cfg)
 	fprintf(f, "resolution=%d\nfps=%d\nbitrate=%d\n", cfg->resolution, cfg->fps, cfg->bitrate);
 	fprintf(f, "# video pacing: 0 = lowest delay, 1 = balanced, 2 = smoothest\npacing=%d\n", cfg->pacing);
 	fprintf(f, "low_latency=%d\nvibration=%d\n", cfg->low_latency ? 1 : 0, cfg->vibration ? 1 : 0);
+	fprintf(f, "port_guessing=%d\n", cfg->port_guessing ? 1 : 0);
 	fprintf(f, "dump_stream=%d\nverbose_log=%d\n", cfg->dump_stream ? 1 : 0, cfg->verbose_log ? 1 : 0);
 	if(cfg->have_account_id)
 	{
@@ -311,6 +322,10 @@ bool config_save(const Config *cfg)
 		if(chiaki_base64_encode(cfg->psn_account_id, sizeof(cfg->psn_account_id), b64, sizeof(b64)) == CHIAKI_ERR_SUCCESS)
 			fprintf(f, "psn_account_id=%s\n", b64);
 	}
+	if(cfg->psn_refresh_token[0])
+		fprintf(f, "psn_refresh_token=%s\n", cfg->psn_refresh_token);
+	if(cfg->psn_auth_token[0])
+		fprintf(f, "psn_auth_token=%s\n", cfg->psn_auth_token);
 
 	for(int i = 0; i < cfg->host_count; i++)
 	{
@@ -322,6 +337,14 @@ bool config_save(const Config *cfg)
 		if(h->host_id[0])
 			fprintf(f, "host_id=%s\n", h->host_id);
 		fprintf(f, "ps5=%d\n", h->ps5 ? 1 : 0);
+		if(h->use_psn)
+			fprintf(f, "use_psn=1\n");
+		if(h->have_duid)
+		{
+			char duid_hex[65];
+			hex_str(h->duid, sizeof(h->duid), duid_hex);
+			fprintf(f, "duid=%s\n", duid_hex);
+		}
 		if(config_host_registered(h))
 		{
 			char regist_hex[CHIAKI_SESSION_AUTH_SIZE * 2 + 1];
@@ -371,6 +394,16 @@ int config_find_host(const Config *cfg, const char *host_id, const char *addr)
 			return i;
 	for(int i = 0; i < cfg->host_count; i++)
 		if(addr && *addr && !strcmp(cfg->hosts[i].host, addr))
+			return i;
+	return -1;
+}
+
+int config_find_host_by_duid(const Config *cfg, const uint8_t duid[32])
+{
+	if(!duid)
+		return -1;
+	for(int i = 0; i < cfg->host_count; i++)
+		if(cfg->hosts[i].have_duid && memcmp(cfg->hosts[i].duid, duid, 32) == 0)
 			return i;
 	return -1;
 }

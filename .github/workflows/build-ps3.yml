@@ -1,0 +1,88 @@
+name: Build Chiaki-ng PS3 (.pkg)
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  host-tests:
+    name: Host PSN compat tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install OpenSSL dev headers
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev python3
+
+      - name: Run PS3 PSN compatibility tests
+        run: |
+          mkdir -p /tmp/ps3_test_inc/chiaki
+          printf '#ifndef CHIAKI_CONFIG_H\n#define CHIAKI_CONFIG_H\n#define CHIAKI_LIB_ENABLE_OPUS 0\n#endif\n' > /tmp/ps3_test_inc/chiaki/config.h
+          gcc -Wall -Wextra -Wno-unused-parameter -DCHIAKI_PS3_CURL_HOST_OPENSSL \
+            -I/tmp/ps3_test_inc -Ips3/compat -Ips3/src -Ilib/include -Ilib/src \
+            ps3/tools/psn_compat_test.c ps3/src/ps3_json.c ps3/src/ps3_curl.c ps3/src/config.c \
+            lib/src/base64.c lib/src/random.c lib/src/sock.c lib/src/time.c \
+            -lssl -lcrypto -lpthread -o /tmp/psn_compat_test
+          /tmp/psn_compat_test
+          python3 -m py_compile ps3/tools/export_keys.py ps3/tools/psn_login.py
+
+  build-pkg:
+    name: Build PS3 SELF & PKG
+    runs-on: ubuntu-latest
+    needs: host-tests
+    steps:
+      - name: Checkout repository and required submodules
+        uses: actions/checkout@v4
+
+      - name: Init PS3 build submodules
+        run: |
+          git submodule update --init --depth 1 \
+            third-party/nanopb \
+            third-party/jerasure \
+            third-party/gf-complete \
+            ps3/third-party/opus
+
+      - name: Build chiaki-ps3.pkg inside ps3dev container
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/src" \
+            -w /src \
+            hldtux/ps3dev:latest \
+            bash -euo pipefail -c '
+              export PS3DEV="${PS3DEV:-/usr/local/ps3dev}"
+              export PSL1GHT="${PSL1GHT:-$PS3DEV}"
+              export PORTLIBS="${PORTLIBS:-$PS3DEV/portlibs/ppu}"
+              export PATH="$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin"
+
+              if ! command -v protoc >/dev/null 2>&1 || ! python3 -c "import google.protobuf" 2>/dev/null; then
+                apt-get update && apt-get install -y protobuf-compiler python3-protobuf git ca-certificates
+              fi
+
+              if [ ! -f "$PORTLIBS/lib/libmbedtls.a" ]; then
+                echo "Building mbedTLS for PS3 via ps3libraries..."
+                git clone --depth 1 https://github.com/ps3dev/ps3libraries.git /tmp/ps3libraries
+                cd /tmp/ps3libraries
+                ./libraries.sh 18
+                cd /src
+              fi
+
+              cd /src/ps3
+              make -j"$(nproc)"
+              make pkg
+              ls -lh chiaki-ps3.self chiaki-ps3.pkg
+            '
+
+      - name: Upload chiaki-ps3.pkg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chiaki-ng-ps3-pkg
+          path: |
+            ps3/chiaki-ps3.pkg
+            ps3/chiaki-ps3.self
+            ps3/tools/psn_login.py
+            ps3/tools/export_keys.py
+          if-no-files-found: error

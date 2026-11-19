@@ -25,14 +25,14 @@
 #define LIST_ROWS     5
 #define HINT_Y        646
 
-enum { OPT_CONNECT, OPT_REGISTER, OPT_SET_IP, OPT_TYPE, OPT_REMOVE };
+enum { OPT_CONNECT, OPT_REGISTER, OPT_SET_IP, OPT_TYPE, OPT_PSN_MODE, OPT_REMOVE };
 
 static const int res_values[] = { 360, 540, 720 };
 static const int fps_values[] = { 30, 60 };
 static const int bitrate_values[] = { 0, 3000, 5000, 7500, 10000, 15000 };
 #define COUNT(a) ((int)(sizeof(a) / sizeof((a)[0])))
 
-enum { SET_RESOLUTION, SET_FPS, SET_BITRATE, SET_PACING, SET_LOW_LATENCY, SET_VIBRATION, SET_DUMP, SET_VERBOSE, SET_ACCOUNT, SET_IMPORT, SET_COUNT };
+enum { SET_RESOLUTION, SET_FPS, SET_BITRATE, SET_PACING, SET_LOW_LATENCY, SET_VIBRATION, SET_PORT_GUESSING, SET_DUMP, SET_VERBOSE, SET_ACCOUNT, SET_PSN_DISCOVER, SET_IMPORT, SET_COUNT };
 
 // ---------------------------------------------------------------------------
 // model
@@ -153,6 +153,11 @@ void menu_set_discovered(Menu *m, const DiscoveredHost *list, int count)
 static bool host_registered(const Menu *m, const MenuHost *h)
 {
 	return h->cfg_index >= 0 && config_host_registered(&m->cfg->hosts[h->cfg_index]);
+}
+
+static bool host_connectable(const Menu *m, const MenuHost *h)
+{
+	return h->cfg_index >= 0 && config_host_connectable(m->cfg, &m->cfg->hosts[h->cfg_index]);
 }
 
 // ---------------------------------------------------------------------------
@@ -276,13 +281,14 @@ static void open_options(Menu *m)
 {
 	const MenuHost *h = &m->hosts[m->sel];
 	m->opt_count = 0;
-	if(host_registered(m, h))
+	if(host_connectable(m, h))
 		m->opt_items[m->opt_count++] = OPT_CONNECT;
 	m->opt_items[m->opt_count++] = OPT_REGISTER;
 	if(h->cfg_index >= 0)
 	{
 		m->opt_items[m->opt_count++] = OPT_SET_IP;
 		m->opt_items[m->opt_count++] = OPT_TYPE;
+		m->opt_items[m->opt_count++] = OPT_PSN_MODE;
 		m->opt_items[m->opt_count++] = OPT_REMOVE;
 	}
 	m->opt_sel = 0;
@@ -295,7 +301,7 @@ static MenuAction activate_host(Menu *m)
 {
 	MenuAction act = { MENU_ACT_NONE, -1, 0, "" };
 	const MenuHost *h = &m->hosts[m->sel];
-	if(host_registered(m, h))
+	if(host_connectable(m, h))
 	{
 		act.type = MENU_ACT_CONNECT;
 		act.host = h->cfg_index;
@@ -403,6 +409,15 @@ static MenuAction options_handle(Menu *m, uint32_t ev)
 				act.type = MENU_ACT_SAVE;
 				break;
 			}
+			case OPT_PSN_MODE:
+			{
+				ConfigHost *ch = &m->cfg->hosts[h->cfg_index];
+				ch->use_psn = !ch->use_psn;
+				menu_rebuild(m);
+				menu_set_note(m, ch->use_psn ? "Connection mode: PSN (Internet)." : "Connection mode: Auto (LAN first, then PSN).");
+				act.type = MENU_ACT_SAVE;
+				break;
+			}
 			case OPT_REMOVE:
 				config_remove_host(m->cfg, h->cfg_index);
 				menu_rebuild(m);
@@ -433,7 +448,7 @@ static MenuAction settings_handle(Menu *m, uint32_t ev)
 	if(ev & MENU_EV_DOWN)
 		m->set_sel = (m->set_sel + 1) % SET_COUNT;
 	int step = (ev & MENU_EV_RIGHT) ? 1 : (ev & MENU_EV_LEFT) ? -1 : 0;
-	if((ev & MENU_EV_CROSS) && m->set_sel != SET_ACCOUNT && m->set_sel != SET_IMPORT)
+	if((ev & MENU_EV_CROSS) && m->set_sel != SET_ACCOUNT && m->set_sel != SET_PSN_DISCOVER && m->set_sel != SET_IMPORT)
 		step = 1;
 	if(step)
 	{
@@ -461,6 +476,9 @@ static MenuAction settings_handle(Menu *m, uint32_t ev)
 			case SET_VIBRATION:
 				cfg->vibration = !cfg->vibration;
 				break;
+			case SET_PORT_GUESSING:
+				cfg->port_guessing = !cfg->port_guessing;
+				break;
 			case SET_DUMP:
 				cfg->dump_stream = !cfg->dump_stream;
 				break;
@@ -476,6 +494,8 @@ static MenuAction settings_handle(Menu *m, uint32_t ev)
 	}
 	if((ev & MENU_EV_CROSS) && m->set_sel == SET_ACCOUNT)
 		act.type = MENU_ACT_ACCOUNT;
+	if((ev & MENU_EV_CROSS) && m->set_sel == SET_PSN_DISCOVER)
+		act.type = MENU_ACT_PSN_DISCOVER;
 	if((ev & MENU_EV_CROSS) && m->set_sel == SET_IMPORT)
 		act.type = MENU_ACT_IMPORT;
 	if(act.type != MENU_ACT_NONE)
@@ -550,10 +570,27 @@ static void draw_hints(Canvas *c, const UiIcon *icons, const char *const *labels
 
 static void status_text(const Menu *m, const MenuHost *h, char *out, size_t size, uint32_t *dot)
 {
-	const char *state = !h->discovered ? "Not found" : h->standby ? "Rest mode" : "Ready";
-	*dot = !h->discovered ? COL_MISSING : h->standby ? COL_STANDBY : COL_READY;
-	const char *reg = host_registered(m, h) ? "Registered" : "Not registered";
-	snprintf(out, size, "%s   |   %s   |   %s   |   %s", h->ps5 ? "PS5" : "PS4", h->addr[0] ? h->addr : "No IP address", state, reg);
+	const ConfigHost *ch = h->cfg_index >= 0 ? &m->cfg->hosts[h->cfg_index] : NULL;
+	bool psn_ready = ch && config_has_psn(m->cfg) && (ch->use_psn || ch->have_duid);
+	const char *state;
+	if(h->discovered)
+	{
+		state = h->standby ? "Rest mode" : "Ready (LAN)";
+		*dot = h->standby ? COL_STANDBY : COL_READY;
+	}
+	else if(psn_ready)
+	{
+		state = "PSN (Internet)";
+		*dot = COL_ACCENT;
+	}
+	else
+	{
+		state = "Not found";
+		*dot = COL_MISSING;
+	}
+	const char *reg = host_registered(m, h) ? "Registered" : psn_ready ? "PSN auto-auth" : "Not registered";
+	const char *addr = h->addr[0] ? h->addr : (psn_ready ? "Remote via PSN" : "No IP address");
+	snprintf(out, size, "%s   |   %s   |   %s   |   %s", h->ps5 ? "PS5" : "PS4", addr, state, reg);
 }
 
 static void draw_hosts(Menu *m, Canvas *c, bool hints)
@@ -598,7 +635,7 @@ static void draw_hosts(Menu *m, Canvas *c, bool hints)
 	if(!hints)
 		return;
 	const char *cross = "Connect";
-	if(m->host_count > 0 && !host_registered(m, &m->hosts[m->sel]))
+	if(m->host_count > 0 && !host_connectable(m, &m->hosts[m->sel]))
 		cross = "Register";
 	if(m->host_count > 0)
 	{
@@ -614,11 +651,12 @@ static void draw_hosts(Menu *m, Canvas *c, bool hints)
 	}
 }
 
-static const char *opt_label(int opt, bool registered, bool ps5)
+static const char *opt_label(int opt, bool registered, bool ps5, bool use_psn)
 {
 	switch(opt)
 	{
 		case OPT_TYPE: return ps5 ? "Console type: PS5" : "Console type: PS4";
+		case OPT_PSN_MODE: return use_psn ? "Connection: PSN (Internet)" : "Connection: Auto (LAN / PSN)";
 		case OPT_CONNECT: return "Connect";
 		case OPT_REGISTER: return registered ? "Register again with PIN" : "Register with PIN";
 		case OPT_SET_IP: return "Set IP address";
@@ -631,18 +669,19 @@ static void draw_options(Menu *m, Canvas *c)
 {
 	draw_hosts(m, c, false);
 	ui_blend(c, 0, 0, UI_W, UI_H, 0x000000, 120);
-	int w = 520, h = 96 + m->opt_count * 60;
-	int x = UI_W - MARGIN_X - w, y = 150;
+	int w = 540, h = 96 + m->opt_count * 56;
+	int x = UI_W - MARGIN_X - w, y = 140;
 	ui_round_rect(c, x, y, w, h, 14, 0x1a2a48, 245);
 	ui_round_rect(c, x, y, w, 4, 2, COL_ACCENT, 255);
 	const MenuHost *mh = &m->hosts[m->sel];
+	bool use_psn = mh->cfg_index >= 0 && m->cfg->hosts[mh->cfg_index].use_psn;
 	ui_text_fit(c, &font_bold, x + 28, y + 24, mh->name, COL_TEXT, w - 56);
 	for(int i = 0; i < m->opt_count; i++)
 	{
-		int iy = y + 78 + i * 60;
+		int iy = y + 76 + i * 56;
 		if(i == m->opt_sel)
-			ui_round_rect(c, x + 14, iy - 8, w - 28, 50, 8, 0xffffff, 40);
-		ui_text(c, &font_normal, x + 30, iy, opt_label(m->opt_items[i], host_registered(m, mh), mh->ps5), COL_TEXT);
+			ui_round_rect(c, x + 14, iy - 8, w - 28, 48, 8, 0xffffff, 40);
+		ui_text(c, &font_normal, x + 30, iy, opt_label(m->opt_items[i], host_registered(m, mh), mh->ps5, use_psn), COL_TEXT);
 	}
 	UiIcon icons[] = { UI_ICON_UPDOWN, UI_ICON_CROSS, UI_ICON_CIRCLE };
 	const char *labels[] = { "Choose", "Select", "Back" };
@@ -670,10 +709,14 @@ static void setting_value(const Menu *m, int item, char *out, size_t size)
 		}
 		case SET_LOW_LATENCY: snprintf(out, size, "%s", cfg->low_latency ? "On" : "Off"); break;
 		case SET_VIBRATION: snprintf(out, size, "%s", cfg->vibration ? "On" : "Off"); break;
+		case SET_PORT_GUESSING: snprintf(out, size, "%s", cfg->port_guessing ? "On" : "Off"); break;
 		case SET_DUMP: snprintf(out, size, "%s", cfg->dump_stream ? "On" : "Off"); break;
 		case SET_VERBOSE: snprintf(out, size, "%s", cfg->verbose_log ? "On" : "Off"); break;
 		case SET_ACCOUNT:
 			snprintf(out, size, "%s", cfg->have_account_id ? "Set" : "Not set");
+			break;
+		case SET_PSN_DISCOVER:
+			snprintf(out, size, "%s", config_has_psn(cfg) ? "Ready" : "No token");
 			break;
 		case SET_IMPORT: out[0] = '\0'; break;
 		default: out[0] = '\0';
@@ -684,31 +727,38 @@ static void draw_settings(Menu *m, Canvas *c)
 {
 	draw_header(m, c, "Settings");
 	static const char *names[SET_COUNT] = {
-		"Resolution", "Frame rate", "Bitrate", "Video pacing", "Low-latency mode", "Vibration", "Save video stream (debug)", "Detailed log (debug)", "PSN account ID", "Import chiaki.cfg from USB"
+		"Resolution", "Frame rate", "Bitrate", "Video pacing", "Low-latency mode", "Vibration",
+		"NAT port guessing (PSN)", "Save video stream (debug)", "Detailed log (debug)",
+		"PSN account ID", "Find PS5 consoles via PSN", "Import chiaki.cfg from USB"
 	};
 	for(int i = 0; i < SET_COUNT; i++)
 	{
-		int y = LIST_Y - 6 + i * 47;
+		int y = LIST_Y - 14 + i * 39;
 		if(i == m->set_sel)
 		{
-			ui_round_rect(c, MARGIN_X - 24, y - 4, UI_W - 2 * MARGIN_X + 48, 44, 10, 0xffffff, 34);
-			ui_round_rect(c, MARGIN_X - 24, y + 5, 5, 28, 2, COL_ACCENT, 255);
+			ui_round_rect(c, MARGIN_X - 24, y - 3, UI_W - 2 * MARGIN_X + 48, 36, 8, 0xffffff, 34);
+			ui_round_rect(c, MARGIN_X - 24, y + 4, 5, 22, 2, COL_ACCENT, 255);
 		}
-		ui_text(c, &font_normal, MARGIN_X, y + 6, names[i], COL_TEXT);
+		ui_text(c, &font_normal, MARGIN_X, y + 3, names[i], COL_TEXT);
 		char val[48];
 		setting_value(m, i, val, sizeof(val));
 		int vw = ui_text_width(&font_bold, val);
 		int vx = UI_W - MARGIN_X - 40 - vw;
-		ui_text(c, &font_bold, vx, y + 6, val, i == m->set_sel ? COL_ACCENT : COL_TEXT);
-		if(i == m->set_sel && i != SET_ACCOUNT && i != SET_IMPORT)
+		ui_text(c, &font_bold, vx, y + 3, val, i == m->set_sel ? COL_ACCENT : COL_TEXT);
+		bool is_action = (i == SET_ACCOUNT || i == SET_PSN_DISCOVER || i == SET_IMPORT);
+		if(i == m->set_sel && !is_action)
 		{
-			ui_text(c, &font_bold, vx - 30, y + 6, "<", COL_DIM);
-			ui_text(c, &font_bold, UI_W - MARGIN_X - 26, y + 6, ">", COL_DIM);
+			ui_text(c, &font_bold, vx - 30, y + 3, "<", COL_DIM);
+			ui_text(c, &font_bold, UI_W - MARGIN_X - 26, y + 3, ">", COL_DIM);
 		}
 	}
-	bool action_row = m->set_sel == SET_ACCOUNT || m->set_sel == SET_IMPORT;
+	bool action_row = m->set_sel == SET_ACCOUNT || m->set_sel == SET_PSN_DISCOVER || m->set_sel == SET_IMPORT;
 	UiIcon icons[] = { UI_ICON_UPDOWN, action_row ? UI_ICON_CROSS : UI_ICON_LEFTRIGHT, UI_ICON_CIRCLE };
-	const char *labels[] = { "Choose", m->set_sel == SET_ACCOUNT ? "Enter" : m->set_sel == SET_IMPORT ? "Import" : "Change", "Back" };
+	const char *labels[] = {
+		"Choose",
+		m->set_sel == SET_ACCOUNT ? "Enter" : m->set_sel == SET_PSN_DISCOVER ? "Search" : m->set_sel == SET_IMPORT ? "Import" : "Change",
+		"Back"
+	};
 	draw_hints(c, icons, labels, 3);
 }
 

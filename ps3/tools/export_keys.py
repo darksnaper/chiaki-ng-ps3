@@ -87,8 +87,15 @@ def main():
     print('fps=60')
     account = qt_unescape(settings.get('psn_account_id', '')).decode('ascii', 'replace').strip()
     if account:
-        print('# PSN account id: lets the PS3 register more consoles with a PIN')
+        print('# PSN account id: lets the PS3 register consoles and connect over PSN')
         print('psn_account_id=%s' % account)
+    refresh_token = qt_unescape(settings.get('psn_refresh_token', '')).decode('ascii', 'replace').strip()
+    if refresh_token:
+        print('# PSN OAuth2 refresh token: lets the PS3 wake & stream your remote PS5 over the Internet')
+        print('psn_refresh_token=%s' % refresh_token)
+    auth_token = qt_unescape(settings.get('psn_auth_token', '')).decode('ascii', 'replace').strip()
+    if auth_token:
+        print('psn_auth_token=%s' % auth_token)
     for i, h in enumerate(consoles):
         name = qt_unescape(h.get('server_nickname', '')).decode('utf-8', 'replace')
         regist_key = byte_array(h['rp_regist_key'])
